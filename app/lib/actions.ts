@@ -1,43 +1,19 @@
 'use server';
-import { z } from 'zod';
+
 import { sql } from '@vercel/postgres';
+import bcrypt from 'bcrypt';
 
+import { storefrontSchema, storefrontState } from './shemaVelidation';
+import { userSchema, userState } from './shemaVelidation';
 
-const storefrontSchema = z.object({
-   id: z.string(),
-   owner_name: z.string().min(1, { message: 'Owner name is required' }),
-   business_name: z.string().min(1, { message: 'Business name is required' }),
-   phone: z.string().min(1, { message: 'Phone number is required' }),
-   email: z.email({ message: 'Email is required' }),
-   gst_number: z.string().optional(),
-   street: z.string().optional(),
-   city: z.string().optional(),
-   state: z.string().optional(),
-   zip: z.string().optional()
-});
-
-export type State = {
-   message?: string | null;
-   errors?: {
-      owner_name?: string[];
-      business_name?: string[];
-      phone?: string[];
-      email?: string[];
-      gst_number?: string[];
-      street?: string[];
-      city?: string[];
-      state?: string[];
-      zip?: string[];
-   }
-}
 
 const CreateStorefront = storefrontSchema.omit({ id: true });
 
-export async function createStorefront(prevState: State, formData: FormData) {
+export async function createStorefront(prevState: storefrontState, formData: FormData) {
    const parsedData = CreateStorefront.safeParse(
       Object.fromEntries(formData.entries())
    );
-   console.log(parsedData);
+   /* console.log(parsedData); */
 
    if (!parsedData.success) {
       return {
@@ -56,8 +32,24 @@ export async function createStorefront(prevState: State, formData: FormData) {
       `;
 
       return result.rows[0];
-   } catch (error) {
+   } catch (error: any) {
       console.error('Error creating store:', error);
+      if (error.code === '23505') {
+         if (error.detail?.includes('email')) {
+            return {
+               ...prevState,
+               message: 'Email already registered.',
+               errors: { email: ['Email already registered.'] }
+            };
+         }
+         if (error.detail?.includes('phone')) {
+            return {
+               ...prevState,
+               message: 'Phone number already registered.',
+               errors: { phone: ['Phone number already registered.'] }
+            };
+         }
+      }
       throw new Error('Failed to create store');
    }
 }
@@ -77,3 +69,56 @@ export async function createStorefront(prevState: State, formData: FormData) {
       return { success: false, message: `Database connection failed:` };
    }
 } */
+
+export async function createUser(prevState: userState, formData: FormData) {
+   const parsedData = userSchema.safeParse(
+      Object.fromEntries(formData.entries())
+   );
+   console.log('Actions module loaded', parsedData);
+
+   if (!parsedData.success) {
+      return {
+         ...prevState,
+         errors: parsedData.error.flatten().fieldErrors,
+         message: 'Missing required fields or invalid data to register.'
+      };
+   }
+
+   const { store_id, first_name, last_name, email, phone, password, is_primary } = parsedData.data;
+   const hashedPassword = await bcrypt.hash(password, 10);
+
+   try {
+      const result = await sql`
+         INSERT INTO users (store_id, first_name, last_name, email, phone, password, is_primary)
+         VALUES (${store_id}, ${first_name}, ${last_name}, ${email}, ${phone}, ${hashedPassword}, ${is_primary})
+         RETURNING *;
+      `;
+
+      return result.rows[0];
+
+   } catch (error: any) {
+      console.error('Error creating user:', `${error instanceof Error ? error.message : String(error)}`);
+
+      if (error.code === '23505') {
+         if (error.detail?.includes('email')) {
+            return {
+               ...prevState,
+               message: 'Email already registered.',
+               errors: { email: ['Email already registered.'] }
+            };
+         }
+         if (error.detail?.includes('phone')) {
+            return {
+               ...prevState,
+               message: 'Phone number already registered.',
+               errors: { phone: ['Phone number already registered.'] }
+            };
+         }
+      }
+      return {
+         ...prevState,
+         message: `Failed to create user. Reason: ${error instanceof Error ? error.message : String(error)}`,
+         errors: {}
+      };
+   }
+}
